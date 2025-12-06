@@ -180,13 +180,6 @@ else
     magenta "GH_TIDY_DEV_MODE: Skipping $trunk_branch checkout & update because in GH_TIDY_DEV_MODE"
 fi
 
-if ! "$SKIP_GC"; then
-    echo
-    cyan "Cleaning unnecessary files & optimizing your local repo..."
-    git gc
-    green "Complete!"
-fi
-
 # Function to check if a branch exists locally
 function branch_exists_locally() {
     local branch="$1"
@@ -261,6 +254,16 @@ if "$REBASE_ALL"; then
     git checkout "${trunk_branch}"
     echo
     green "Finished rebasing!"
+fi
+
+if ! "$SKIP_GC"; then
+    echo
+    cyan "Cleaning unnecessary files & optimizing your local repo..."
+    if git gc; then
+        green "Cleanup complete!"
+    else
+        yellow "WARNING: Cleanup attempted, but 'git gc' failed."
+    fi
 fi
 
 if ! "$SKIP_UPDATE_CHECK"; then
