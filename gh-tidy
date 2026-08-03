@@ -259,7 +259,7 @@ function worktree_head_is_merged() {
     local head="$1"
     local branch="$2"
     git merge-base --is-ancestor "$head" "$trunk_branch" && return 0
-    [[ -n "$(gh pr list --state merged --limit 100 --search "head:$branch" --json headRefOid --jq '.[].headRefOid' 2>/dev/null | grep -Fx "$head")" ]]
+    [[ -n "$(gh pr list --state merged --limit 10000 --search "head:$branch" --json headRefOid --jq '.[].headRefOid' 2>/dev/null | grep -Fx "$head")" ]]
 }
 
 function remove_locked_worktree() {

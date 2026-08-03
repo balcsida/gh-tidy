@@ -59,6 +59,34 @@ output=$(run_tidy "$repo")
 assert_exists "$worktree"
 assert_contains "$output" "not landed"
 
+repo="$tmp/older-pr"
+worktree="$tmp/older-pr-worktree"
+make_repo "$repo"
+add_locked_worktree "$repo" "$worktree" topic
+touch "$worktree/older-pr"
+git -C "$worktree" add older-pr
+git -C "$worktree" commit -qm older-pr
+GH_TIDY_TEST_MATCH_HEAD=$(git -C "$worktree" rev-parse HEAD)
+gh() {
+  local limit=30 previous=
+  for arg in "$@"; do
+    [[ "$previous" == --limit ]] && limit=$arg
+    previous=$arg
+  done
+  for ((i = 0; i < limit; i++)); do
+    echo 0000000000000000000000000000000000000000
+  done
+  if (( limit > 100 )); then
+    echo "$GH_TIDY_TEST_MATCH_HEAD"
+  fi
+  return 0
+}
+export GH_TIDY_TEST_MATCH_HEAD
+export -f gh
+output=$(run_tidy "$repo")
+unset -f gh
+assert_missing "$worktree"
+
 repo="$tmp/missing"
 worktree="$tmp/missing-worktree"
 make_repo "$repo"
