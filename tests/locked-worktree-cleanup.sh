@@ -62,21 +62,22 @@ assert_contains "$output" "not landed"
 repo="$tmp/older-pr"
 worktree="$tmp/older-pr-worktree"
 make_repo "$repo"
-add_locked_worktree "$repo" "$worktree" topic
+add_locked_worktree "$repo" "$worktree" review/pr-73
 touch "$worktree/older-pr"
 git -C "$worktree" add older-pr
 git -C "$worktree" commit -qm older-pr
 GH_TIDY_TEST_MATCH_HEAD=$(git -C "$worktree" rev-parse HEAD)
 gh() {
-  local limit=30 previous=
+  local limit=30 previous= search=
   for arg in "$@"; do
     [[ "$previous" == --limit ]] && limit=$arg
+    [[ "$previous" == --search ]] && search=$arg
     previous=$arg
   done
   for ((i = 0; i < limit; i++)); do
     echo 0000000000000000000000000000000000000000
   done
-  if (( limit > 100 )); then
+  if [[ "$search" == "$GH_TIDY_TEST_MATCH_HEAD" ]]; then
     echo "$GH_TIDY_TEST_MATCH_HEAD"
   fi
   return 0

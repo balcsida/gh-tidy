@@ -257,9 +257,8 @@ function get_stale_locked_worktrees() {
 
 function worktree_head_is_merged() {
     local head="$1"
-    local branch="$2"
     git merge-base --is-ancestor "$head" "$trunk_branch" && return 0
-    [[ -n "$(gh pr list --state merged --limit 10000 --search "head:$branch" --json headRefOid --jq '.[].headRefOid' 2>/dev/null | grep -Fx "$head")" ]]
+    [[ -n "$(gh pr list --state merged --limit 1 --search "$head" --json headRefOid --jq '.[].headRefOid' 2>/dev/null | grep -Fx "$head")" ]]
 }
 
 function remove_locked_worktree() {
@@ -318,7 +317,7 @@ while IFS=$'\t' read -r -u 3 worktree_path worktree_branch; do
             yellow "Keeping locked worktree '$worktree_path' (dirty)."
             continue
         fi
-        if ! worktree_head_is_merged "$worktree_head" "$worktree_branch"; then
+        if ! worktree_head_is_merged "$worktree_head"; then
             yellow "Keeping locked worktree '$worktree_path' (HEAD is not landed)."
             continue
         fi
