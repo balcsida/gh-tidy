@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+tmp=$(mktemp -d)
+trap 'chmod -R u+w "$tmp" 2>/dev/null || true; rm -rf "$tmp"' EXIT
+
+fail() { echo "FAIL: $*" >&2; exit 1; }
+assert_exists() { [[ -d "$1" ]] || fail "expected $1 to exist"; }
+assert_missing() { [[ ! -e "$1" ]] || fail "expected $1 to be removed"; }
+assert_contains() { [[ "$1" == *"$2"* ]] || fail "expected output to contain: $2"; }
+
+make_repo() {
+  local repo="$1"
+  git init -q -b main "$repo"
+  git -C "$repo" config user.name test
+  git -C "$repo" config user.email test@example.com
+  touch "$repo/README"
+  git -C "$repo" add README
+  git -C "$repo" commit -qm initial
+}
+
+add_locked_worktree() {
+  local repo="$1" path="$2" branch="$3"
+  git -C "$repo" worktree add -q -b "$branch" "$path"
+  git -C "$repo" worktree lock --reason test "$path"
+}
+
+run_tidy() {
+  local repo="$1"
+  (cd "$repo" && GH_TIDY_DEV_MODE=true "$script_dir/gh-tidy" \
+    --auto-delete-merged --skip-gc --skip-prune --skip-update-check --trunk main) 2>&1
+}
+
+repo="$tmp/clean"
+worktree="$tmp/clean-landed"
+make_repo "$repo"
+add_locked_worktree "$repo" "$worktree" topic
+output=$(run_tidy "$repo")
+assert_missing "$worktree"
+
+repo="$tmp/dirty"
+worktree="$tmp/dirty-landed"
+make_repo "$repo"
+add_locked_worktree "$repo" "$worktree" topic
+touch "$worktree/dirty"
+output=$(run_tidy "$repo")
+assert_exists "$worktree"
+assert_contains "$output" "dirty"
+
+repo="$tmp/unlanded"
+worktree="$tmp/unlanded-worktree"
+make_repo "$repo"
+add_locked_worktree "$repo" "$worktree" topic
+touch "$worktree/unlanded"
+git -C "$worktree" add unlanded
+git -C "$worktree" commit -qm unlanded
+output=$(run_tidy "$repo")
+assert_exists "$worktree"
+assert_contains "$output" "not landed"
+
+repo="$tmp/missing"
+worktree="$tmp/missing-worktree"
+make_repo "$repo"
+add_locked_worktree "$repo" "$worktree" topic
+rm -rf "$worktree"
+output=$(run_tidy "$repo")
+assert_contains "$(git -C "$repo" worktree list --porcelain)" "locked test"
+assert_contains "$output" "directory is gone"
+
+repo="$tmp/remove-failure"
+worktree="$tmp/remove-failure-worktree"
+submodule="$tmp/submodule"
+git init -q -b main "$submodule"
+git -C "$submodule" config user.name test
+git -C "$submodule" config user.email test@example.com
+touch "$submodule/README"
+git -C "$submodule" add README
+git -C "$submodule" commit -qm initial
+make_repo "$repo"
+git -C "$repo" -c protocol.file.allow=always submodule add -q "$submodule" vendor/submodule
+git -C "$repo" commit -qm 'add submodule'
+add_locked_worktree "$repo" "$worktree" topic
+git -C "$worktree" -c protocol.file.allow=always submodule update --init -q
+output=$(run_tidy "$repo" || true)
+assert_contains "$(git -C "$repo" worktree list --porcelain)" "locked"
+assert_contains "$output" "Unable to remove locked worktree"
+
+echo "PASS: locked worktree cleanup"
