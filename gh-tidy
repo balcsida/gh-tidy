@@ -258,7 +258,7 @@ function get_stale_locked_worktrees() {
 function worktree_head_is_merged() {
     local head="$1"
     git merge-base --is-ancestor "$head" "$trunk_branch" && return 0
-    [[ -n "$(gh pr list --state merged --limit 1 --search "$head" --json headRefOid --jq '.[].headRefOid' 2>/dev/null | grep -Fx "$head")" ]]
+    [[ -n "$(gh api --paginate "repos/{owner}/{repo}/commits/$head/pulls" --jq ".[] | select(.merged_at != null and .head.sha == \"$head\") | .head.sha" 2>/dev/null | grep -Fx "$head")" ]]
 }
 
 function remove_locked_worktree() {
