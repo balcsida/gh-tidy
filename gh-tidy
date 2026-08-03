@@ -13,6 +13,7 @@ Tidies your work space!
     * Checks your local branches for ones that show as merged to master, and asks for your permission to delete them
     * Checks your local branches for ones that have their corresponding pull requests merged, and asks for your permission to delete them
     * Safely removes clean worktrees whose HEAD has landed, along with their branches
+    * Prunes worktrees whose directories are gone, and asks about locked ones that pruning can't reach
 
 Options:
     --rebase-all
@@ -330,6 +331,11 @@ function delete_landed_branch() {
 
 echo
 cyan "Checking for worktrees whose work has already landed..."
+# Clear the administrative files left behind by worktrees whose directories are
+# gone.  This skips locked worktrees by design, which is why the loop below still
+# has to handle a missing directory itself.  Not gated on --skip-prune: that flag
+# is about the 'git fetch --prune' network round-trip, and this is purely local.
+git worktree prune -v
 # Fed on fd 3, not stdin: a plain '< <(...)' would make the worktree list the loop's
 # stdin, so the 'read -p' prompt below would silently eat list entries instead of
 # asking the user.

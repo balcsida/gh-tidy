@@ -168,6 +168,18 @@ output=$(run_tidy "$repo")
 assert_contains "$(git -C "$repo" worktree list --porcelain)" "locked test"
 assert_contains "$output" "directory is gone"
 
+# Unlocked and its directory is gone: 'git worktree prune' reaps it outright, so it
+# never reaches the loop and the user is never asked about it.
+repo="$tmp/missing-unlocked"
+worktree="$tmp/missing-unlocked-worktree"
+make_repo "$repo"
+add_worktree "$repo" "$worktree" topic
+rm -rf "$worktree"
+output=$(run_tidy "$repo")
+[[ "$(git -C "$repo" worktree list --porcelain)" != *"missing-unlocked-worktree"* ]] \
+  || fail "expected pruning to drop the stale worktree record"
+[[ "$output" != *"directory is gone"* ]] || fail "should not have prompted about a prunable worktree"
+
 repo="$tmp/remove-failure"
 worktree="$tmp/remove-failure-worktree"
 submodule="$tmp/submodule"
