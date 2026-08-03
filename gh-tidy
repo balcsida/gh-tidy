@@ -12,13 +12,13 @@ Tidies your work space!
     * Runs 'git gc' to clean up unnecessary files & optimize your local repo
     * Checks your local branches for ones that show as merged to master, and asks for your permission to delete them
     * Checks your local branches for ones that have their corresponding pull requests merged, and asks for your permission to delete them
-    * Safely removes eligible clean, landed locked worktrees and interactively handles missing ones
+    * Safely removes clean worktrees whose HEAD has landed, along with their branches
 
 Options:
     --rebase-all
 	Rebases all your local branches to the latest master.
     --auto-delete-merged
-	Automatically delete merged branches and stale locked worktrees without prompting (for non-interactive use, e.g. cron, CI, post-merge hooks).
+	Automatically delete merged branches and landed worktrees without prompting (for non-interactive use, e.g. cron, CI, post-merge hooks).
     --skip-gc
 	Skips the 'git gc' step (which executes by default)
     --skip-prune
@@ -30,7 +30,7 @@ Options:
 
 Environment Variables:
     GH_TIDY_REBASE_ALL         Set to 'true' to rebase all branches (same as --rebase-all)
-    GH_TIDY_AUTO_DELETE_MERGED Set to 'true' to auto-delete merged branches & stale locked worktrees (same as --auto-delete-merged)
+    GH_TIDY_AUTO_DELETE_MERGED Set to 'true' to auto-delete merged branches & landed worktrees (same as --auto-delete-merged)
     GH_TIDY_SKIP_GC            Set to 'true' to skip git gc (same as --skip-gc)
     GH_TIDY_SKIP_PRUNE         Set to 'true' to skip git fetch --prune (same as --skip-prune)
     GH_TIDY_SKIP_UPDATE_CHECK  Set to 'true' to skip update check (same as --skip-update-check)
@@ -241,17 +241,24 @@ function get_worktree_branches() {
       '
 }
 
-# A worktree locked by another program (IDE, editor, backup/sync tool) is excluded
-# from 'git worktree prune', so once its directory is gone it lingers forever and
-# keeps its branch un-deletable.  Emit "<path>TAB<branch>" for each of those.
-function get_stale_locked_worktrees() {
+# Every worktree except the main one, as "<path>TAB<branch>TAB<locked>".  A worktree
+# holds its branch hostage - git refuses to delete a checked-out branch - so a
+# worktree whose work has landed keeps a dead branch alive indefinitely.  Locked
+# ones are worse still: a lock (set by an IDE, editor, or backup/sync tool) also
+# excludes them from 'git worktree prune', so they linger even once their directory
+# is gone.  Each entry is only ever removed after proving it clean and landed.
+function get_prunable_worktrees() {
   git worktree list --porcelain 2>/dev/null \
     | awk -v OFS='\t' '
-        /^worktree / { path = substr($0, 10); branch = ""; locked = 0 }
+        # The first record is the main worktree, which is never prunable.
+        function flush() {
+            if (path != "" && ++seen > 1) print path, branch, locked
+            path = ""; branch = ""; locked = 0
+        }
+        /^worktree / { flush(); path = substr($0, 10) }
         /^branch /   { branch = substr($0, 8); sub("^refs/heads/", "", branch) }
         /^locked/    { locked = 1 }
-        /^$/         { if (locked) print path, branch; path = ""; branch = ""; locked = 0 }
-        END          { if (locked) print path, branch }
+        END          { flush() }
       '
 }
 
@@ -269,18 +276,24 @@ function head_is_merged() {
     return 1
 }
 
-function remove_locked_worktree() {
-    local path="$1"
-    if ! git worktree unlock "$path"; then
+# Unlocking is only valid for a worktree that is actually locked, and a failed
+# removal must leave the lock exactly as it found it.
+function remove_worktree() {
+    local path="$1" locked="$2"
+    if [[ "$locked" == "1" ]] && ! git worktree unlock "$path"; then
         red "Unable to unlock locked worktree '$path'."
         return 1
     fi
     if git worktree remove "$path"; then
-        green "Removed locked worktree '$path'."
+        green "Removed worktree '$path'."
         return 0
     fi
-    red "Unable to remove locked worktree '$path'; restoring its lock."
-    git worktree lock "$path" || red "Unable to restore lock for '$path'."
+    if [[ "$locked" == "1" ]]; then
+        red "Unable to remove worktree '$path'; restoring its lock."
+        git worktree lock "$path" || red "Unable to restore lock for '$path'."
+    else
+        red "Unable to remove worktree '$path'."
+    fi
     return 1
 }
 
@@ -316,49 +329,53 @@ function delete_landed_branch() {
 }
 
 echo
-cyan "Checking for stale worktrees locked by another program..."
+cyan "Checking for worktrees whose work has already landed..."
 # Fed on fd 3, not stdin: a plain '< <(...)' would make the worktree list the loop's
 # stdin, so the 'read -p' prompt below would silently eat list entries instead of
 # asking the user.
-while IFS=$'\t' read -r -u 3 worktree_path worktree_branch; do
+while IFS=$'\t' read -r -u 3 worktree_path worktree_branch worktree_locked; do
     [[ -n "$worktree_path" ]] || continue
     if [[ -d "$worktree_path" ]]; then
         if [[ -z "$worktree_branch" ]]; then
-            yellow "Keeping locked worktree '$worktree_path' (no branch checked out)."
+            yellow "Keeping worktree '$worktree_path' (no branch checked out)."
             continue
         fi
         if ! worktree_branch=$(git -C "$worktree_path" symbolic-ref --quiet --short HEAD); then
-            yellow "Keeping locked worktree '$worktree_path' (detached or unverifiable branch)."
+            yellow "Keeping worktree '$worktree_path' (detached or unverifiable branch)."
             continue
         fi
         if ! worktree_head=$(git -C "$worktree_path" rev-parse --verify HEAD 2>/dev/null); then
-            yellow "Keeping locked worktree '$worktree_path' (unverifiable HEAD)."
+            yellow "Keeping worktree '$worktree_path' (unverifiable HEAD)."
             continue
         fi
         if ! worktree_status=$(git -C "$worktree_path" status --porcelain --untracked-files=all 2>/dev/null); then
-            yellow "Keeping locked worktree '$worktree_path' (unable to inspect status)."
+            yellow "Keeping worktree '$worktree_path' (unable to inspect status)."
             continue
         elif [[ -n "$worktree_status" ]]; then
-            yellow "Keeping locked worktree '$worktree_path' (dirty)."
+            yellow "Keeping worktree '$worktree_path' (dirty)."
             continue
         fi
         if head_is_merged "$worktree_head"; then
             :
         elif [[ $? -eq 2 ]]; then
-            yellow "Keeping locked worktree '$worktree_path' (GitHub lookup failed; HEAD is unverifiable)."
+            yellow "Keeping worktree '$worktree_path' (GitHub lookup failed; HEAD is unverifiable)."
             continue
         else
-            yellow "Keeping locked worktree '$worktree_path' (HEAD is not landed)."
+            yellow "Keeping worktree '$worktree_path' (HEAD is not landed)."
             continue
         fi
         if "$AUTO_DELETE_MERGED"; then
-            yellow "Auto-removing locked worktree '$worktree_path' (clean, landed HEAD)"
-            { remove_locked_worktree "$worktree_path" && delete_landed_branch "$worktree_branch"; } || true
-        elif confirm "Locked worktree ${worktree_path} is clean with a landed HEAD - remove it?"; then
-            { remove_locked_worktree "$worktree_path" && delete_landed_branch "$worktree_branch"; } || true
+            yellow "Auto-removing worktree '$worktree_path' (clean, landed HEAD)"
+            { remove_worktree "$worktree_path" "$worktree_locked" && delete_landed_branch "$worktree_branch"; } || true
+        elif confirm "Worktree ${worktree_path} is clean with a landed HEAD - remove it?"; then
+            { remove_worktree "$worktree_path" "$worktree_locked" && delete_landed_branch "$worktree_branch"; } || true
         fi
         continue
     fi
+    # An unlocked worktree with no directory is already handled by 'git worktree
+    # prune'; only a locked one lingers, and it needs an explicit decision because
+    # its contents can no longer be inspected.
+    [[ "$worktree_locked" == "1" ]] || continue
     if "$AUTO_DELETE_MERGED"; then
         yellow "Skipping locked worktree '$worktree_path' (directory is gone; contents cannot be inspected)."
         continue
@@ -371,8 +388,8 @@ while IFS=$'\t' read -r -u 3 worktree_path worktree_branch; do
     if ! confirm "Worktree ${worktree_path} is locked but its directory is gone (${merge_status}) - remove it?"; then
         continue
     fi
-    remove_locked_worktree "$worktree_path" || true
-done 3< <(get_stale_locked_worktrees)
+    remove_worktree "$worktree_path" "$worktree_locked" || true
+done 3< <(get_prunable_worktrees)
 green "Complete!"
 
 worktree_branches=$(get_worktree_branches)

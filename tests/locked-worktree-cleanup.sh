@@ -26,10 +26,14 @@ make_repo() {
   git -C "$repo" commit -qm initial
 }
 
-add_locked_worktree() {
+add_worktree() {
   local repo="$1" path="$2" branch="$3"
   git -C "$repo" worktree add -q -b "$branch" "$path"
-  git -C "$repo" worktree lock --reason test "$path"
+}
+
+add_locked_worktree() {
+  add_worktree "$@"
+  git -C "$1" worktree lock --reason test "$2"
 }
 
 run_tidy() {
@@ -44,6 +48,27 @@ make_repo "$repo"
 add_locked_worktree "$repo" "$worktree" topic
 output=$(run_tidy "$repo")
 assert_missing "$worktree"
+
+# An unlocked worktree is swept on the same terms as a locked one - it holds its
+# branch hostage just as effectively.  The main worktree must survive regardless.
+repo="$tmp/unlocked"
+worktree="$tmp/unlocked-landed"
+make_repo "$repo"
+add_worktree "$repo" "$worktree" topic
+output=$(run_tidy "$repo")
+assert_missing "$worktree"
+assert_exists "$repo"
+assert_no_branch "$repo" topic
+assert_branch "$repo" main
+
+repo="$tmp/unlocked-dirty"
+worktree="$tmp/unlocked-dirty-worktree"
+make_repo "$repo"
+add_worktree "$repo" "$worktree" topic
+touch "$worktree/dirty"
+output=$(run_tidy "$repo")
+assert_exists "$worktree"
+assert_branch "$repo" topic
 
 repo="$tmp/dirty"
 worktree="$tmp/dirty-landed"
@@ -159,6 +184,6 @@ add_locked_worktree "$repo" "$worktree" topic
 git -C "$worktree" -c protocol.file.allow=always submodule update --init -q
 output=$(run_tidy "$repo" || true)
 assert_contains "$(git -C "$repo" worktree list --porcelain)" "locked"
-assert_contains "$output" "Unable to remove locked worktree"
+assert_contains "$output" "Unable to remove worktree"
 
 echo "PASS: locked worktree cleanup"
