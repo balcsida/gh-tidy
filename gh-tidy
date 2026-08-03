@@ -268,6 +268,20 @@ function branch_is_merged() {
     [[ -n "$(gh pr list --state merged --limit 1 --search "head:$branch" --json headRefName --jq '.[].headRefName' 2>/dev/null)" ]]
 }
 
+# Ask a yes/no question, answering "no" when there's nothing to ask on.  A bare
+# 'read' with no terminal returns non-zero at EOF, which under 'set -e' takes the
+# whole script down mid-run - so check for a terminal rather than prompting blind.
+function confirm() {
+    local prompt="$1"
+    if [[ ! -t 0 ]]; then
+        yellow "Not interactive, skipping (use --auto-delete-merged): ${prompt}"
+        return 1
+    fi
+    read -p $'\e[93m'"${prompt} (y/n) "$'\e[0m' -n 1 -r
+    echo
+    [[ $REPLY =~ ^[Yy]$ ]]
+}
+
 echo
 cyan "Checking for stale worktrees locked by another program..."
 # Fed on fd 3, not stdin: a plain '< <(...)' would make the worktree list the loop's
@@ -292,15 +306,8 @@ while IFS=$'\t' read -r -u 3 worktree_path worktree_branch; do
     fi
     if "$AUTO_DELETE_MERGED"; then
         yellow "Auto-removing stale locked worktree '${worktree_path}' (${merge_status})"
-    elif [[ ! -t 0 ]]; then
-        # No terminal to prompt on - 'read' would hit EOF and take the whole script
-        # down under 'set -e'.  Leave the worktree alone and say why.
-        yellow "Skipping stale locked worktree '${worktree_path}' - not interactive (use --auto-delete-merged)."
+    elif ! confirm "Worktree ${worktree_path} is locked but its directory is gone (${merge_status}) - remove it?"; then
         continue
-    else
-        read -p $'\e[93m'"Worktree ${worktree_path} is locked but its directory is gone (${merge_status}) - remove it? (y/n) "$'\e[0m' -n 1 -r
-        echo
-        [[ $REPLY =~ ^[Yy]$ ]] || continue
     fi
     git worktree unlock "$worktree_path" || true
     git worktree remove --force "$worktree_path" || true
@@ -337,9 +344,7 @@ for branch in $(git branch --merged "$trunk_branch" --format='%(refname:short)')
             yellow "Auto-deleting branch '${branch}' (merged into $trunk_branch)"
             git branch -D "${branch}" || true
         else
-            read -p $'\e[93m'"Branch ${branch} is merged into $trunk_branch - delete it? (y/n) "$'\e[0m' -n 1 -r
-            echo
-            if [[ $REPLY =~ ^[Yy]$ ]]; then
+            if confirm "Branch ${branch} is merged into $trunk_branch - delete it?"; then
                 git branch -D "${branch}" || true
             fi
         fi
@@ -362,9 +367,7 @@ for branch in $(git branch --format='%(refname:short)'); do
                 yellow "Auto-deleting branch '${merged_branch}' (PR merged on GitHub)"
                 git branch -D "${merged_branch}" || true
             else
-                read -p $'\e[93m'"Branch ${merged_branch} has been merged - delete it? (y/n) "$'\e[0m' -n 1 -r
-                echo
-                if [[ $REPLY =~ ^[Yy]$ ]]; then
+                if confirm "Branch ${merged_branch} has been merged - delete it?"; then
                     git branch -D "${merged_branch}" || true
                 fi
             fi
