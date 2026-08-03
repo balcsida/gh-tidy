@@ -270,7 +270,10 @@ function branch_is_merged() {
 
 echo
 cyan "Checking for stale worktrees locked by another program..."
-while IFS=$'\t' read -r worktree_path worktree_branch; do
+# Fed on fd 3, not stdin: a plain '< <(...)' would make the worktree list the loop's
+# stdin, so the 'read -p' prompt below would silently eat list entries instead of
+# asking the user.
+while IFS=$'\t' read -r -u 3 worktree_path worktree_branch; do
     [[ -n "$worktree_path" ]] || continue
     if [[ -d "$worktree_path" ]]; then
         # ponytail: a locked worktree whose directory still exists is presumed in use.
@@ -287,16 +290,21 @@ while IFS=$'\t' read -r worktree_path worktree_branch; do
     else
         merge_status="branch '$worktree_branch' is NOT merged - it will be kept"
     fi
-    if ! "$AUTO_DELETE_MERGED"; then
+    if "$AUTO_DELETE_MERGED"; then
+        yellow "Auto-removing stale locked worktree '${worktree_path}' (${merge_status})"
+    elif [[ ! -t 0 ]]; then
+        # No terminal to prompt on - 'read' would hit EOF and take the whole script
+        # down under 'set -e'.  Leave the worktree alone and say why.
+        yellow "Skipping stale locked worktree '${worktree_path}' - not interactive (use --auto-delete-merged)."
+        continue
+    else
         read -p $'\e[93m'"Worktree ${worktree_path} is locked but its directory is gone (${merge_status}) - remove it? (y/n) "$'\e[0m' -n 1 -r
         echo
         [[ $REPLY =~ ^[Yy]$ ]] || continue
-    else
-        yellow "Auto-removing stale locked worktree '${worktree_path}' (${merge_status})"
     fi
     git worktree unlock "$worktree_path" || true
     git worktree remove --force "$worktree_path" || true
-done < <(get_stale_locked_worktrees)
+done 3< <(get_stale_locked_worktrees)
 green "Complete!"
 
 worktree_branches=$(get_worktree_branches)
