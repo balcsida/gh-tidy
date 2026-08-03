@@ -255,7 +255,10 @@ function get_stale_locked_worktrees() {
       '
 }
 
-function worktree_head_is_merged() {
+# Has this commit landed on the trunk?  Returns 0 yes, 1 no, 2 couldn't tell.
+# The GitHub lookup is by head commit, not branch name or author, so it also sees
+# squash merges and pull requests opened by someone other than you.
+function head_is_merged() {
     local head="$1"
     git merge-base --is-ancestor "$head" "$trunk_branch" && return 0
     local merged_heads
@@ -322,7 +325,7 @@ while IFS=$'\t' read -r -u 3 worktree_path worktree_branch; do
             yellow "Keeping locked worktree '$worktree_path' (dirty)."
             continue
         fi
-        if worktree_head_is_merged "$worktree_head"; then
+        if head_is_merged "$worktree_head"; then
             :
         elif [[ $? -eq 2 ]]; then
             yellow "Keeping locked worktree '$worktree_path' (GitHub lookup failed; HEAD is unverifiable)."
@@ -380,6 +383,7 @@ function can_delete_branch() {
 echo
 cyan "Pruning local branches that show as 'merged' to local $trunk_branch..."
 for branch in $(git branch --merged "$trunk_branch" --format='%(refname:short)'); do
+    [[ "$branch" != "$trunk_branch" ]] || continue
     if can_delete_branch "$branch"; then
         if "$AUTO_DELETE_MERGED"; then
             yellow "Auto-deleting branch '${branch}' (merged into $trunk_branch)"
@@ -390,31 +394,39 @@ for branch in $(git branch --merged "$trunk_branch" --format='%(refname:short)')
             fi
         fi
     else
-        green "Skipping deletion of branch '$branch'."
+        green "Skipping branch '$branch' (checked out in a worktree)."
     fi
 done
 green "Complete!"
 # TODO Message if none found
 
-# Covers branches that get squashed & merged
+# Covers branches that get squashed & merged.  Matching on the head commit rather
+# than on 'gh pr list --author @me' also catches branches off pull requests you did
+# not author - a review/* or integrate/* branch lands as someone else's squash
+# commit, so the author filter and 'git branch --merged' above both miss it.
 echo
-cyan "Pruning YOUR local branches that have had their pull requests merged on Github..."
+cyan "Pruning local branches that have had their pull requests merged on Github..."
 for branch in $(git branch --format='%(refname:short)'); do
-    # TODO Make this work with collaborative branches where you aren't the author
-    if can_delete_branch "$branch"; then
-        merged_branch=$(gh pr list --author @me --state merged --limit 1 --search "head:$branch" --json headRefName --jq '.[].headRefName')
-        if [ -n "${merged_branch}" ] && [ "${merged_branch}" == "${branch}" ]; then
-            if "$AUTO_DELETE_MERGED"; then
-                yellow "Auto-deleting branch '${merged_branch}' (PR merged on GitHub)"
-                git branch -D "${merged_branch}" || true
-            else
-                if confirm "Branch ${merged_branch} has been merged - delete it?"; then
-                    git branch -D "${merged_branch}" || true
-                fi
-            fi
-        fi
+    [[ "$branch" != "$trunk_branch" ]] || continue
+    if ! can_delete_branch "$branch"; then
+        green "Skipping branch '$branch' (checked out in a worktree)."
+        continue
+    fi
+    branch_head=$(git rev-parse --verify "$branch" 2>/dev/null) || continue
+    head_is_merged "$branch_head" && merge_check=0 || merge_check=$?
+    if [[ $merge_check -eq 2 ]]; then
+        yellow "Skipping branch '$branch' (GitHub lookup failed; cannot confirm it landed)."
+        continue
+    elif [[ $merge_check -ne 0 ]]; then
+        continue
+    fi
+    if "$AUTO_DELETE_MERGED"; then
+        yellow "Auto-deleting branch '${branch}' (PR merged on GitHub)"
+        git branch -D "${branch}" || true
     else
-        green "Skipping deletion of branch '$branch'."
+        if confirm "Branch ${branch} has been merged - delete it?"; then
+            git branch -D "${branch}" || true
+        fi
     fi
 done
 green "Complete!"

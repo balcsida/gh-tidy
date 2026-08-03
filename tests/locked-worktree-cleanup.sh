@@ -9,6 +9,12 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 assert_exists() { [[ -d "$1" ]] || fail "expected $1 to exist"; }
 assert_missing() { [[ ! -e "$1" ]] || fail "expected $1 to be removed"; }
 assert_contains() { [[ "$1" == *"$2"* ]] || fail "expected output to contain: $2"; }
+assert_no_branch() {
+  git -C "$1" show-ref --verify --quiet "refs/heads/$2" && fail "expected branch $2 to be deleted" || true
+}
+assert_branch() {
+  git -C "$1" show-ref --verify --quiet "refs/heads/$2" || fail "expected branch $2 to survive"
+}
 
 make_repo() {
   local repo="$1"
@@ -96,6 +102,34 @@ export -f gh
 output=$(run_tidy "$repo")
 unset -f gh
 assert_missing "$worktree"
+
+# A squash-merged branch with no worktree at all: only the head-commit lookup finds
+# it.  Nothing here is an ancestor of main, and the branch is not authored by @me.
+repo="$tmp/squashed-no-worktree"
+make_repo "$repo"
+git -C "$repo" branch review/pr-80
+git -C "$repo" branch keep/unlanded
+for b in review/pr-80 keep/unlanded; do
+  git -C "$repo" checkout -q "$b"
+  touch "$repo/${b//\//-}-file"
+  git -C "$repo" add -A
+  git -C "$repo" commit -qm "$b"
+done
+git -C "$repo" checkout -q main
+GH_TIDY_TEST_MATCH_HEAD=$(git -C "$repo" rev-parse review/pr-80)
+gh() {
+  if [[ "$1" == api && "$3" == "repos/{owner}/{repo}/commits/$GH_TIDY_TEST_MATCH_HEAD/pulls" ]]; then
+    echo "$GH_TIDY_TEST_MATCH_HEAD"
+  fi
+  return 0
+}
+export GH_TIDY_TEST_MATCH_HEAD
+export -f gh
+output=$(run_tidy "$repo")
+unset -f gh
+assert_no_branch "$repo" review/pr-80
+assert_branch "$repo" keep/unlanded
+assert_branch "$repo" main
 
 repo="$tmp/missing"
 worktree="$tmp/missing-worktree"
