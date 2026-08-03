@@ -102,6 +102,9 @@ export -f gh
 output=$(run_tidy "$repo")
 unset -f gh
 assert_missing "$worktree"
+# The worktree pass proved this head landed - the branch must go with it, since it
+# is squash-merged (not an ancestor of main) and so invisible to 'git branch --merged'.
+assert_no_branch "$repo" review/pr-73
 
 # A squash-merged branch with no worktree at all: only the head-commit lookup finds
 # it.  Nothing here is an ancestor of main, and the branch is not authored by @me.

@@ -298,6 +298,23 @@ function confirm() {
     [[ $REPLY =~ ^[Yy]$ ]]
 }
 
+# Removing a worktree leaves its branch behind.  We already proved the branch's
+# HEAD landed to justify the removal, so delete it here rather than let the branch
+# passes below re-derive it - 'git branch --merged' misses a squash merge, and the
+# pull request pass only looks at branches you authored.
+function delete_landed_branch() {
+    local branch="$1"
+    [[ -n "$branch" ]] || return 0
+    branch_exists_locally "$branch" || return 0
+    [[ "$branch" != "$trunk_branch" ]] || return 0
+    if "$AUTO_DELETE_MERGED"; then
+        yellow "Auto-deleting branch '${branch}' (worktree removed, HEAD landed)"
+        git branch -D "$branch" || true
+    elif confirm "Branch ${branch} is landed and its worktree is gone - delete it?"; then
+        git branch -D "$branch" || true
+    fi
+}
+
 echo
 cyan "Checking for stale worktrees locked by another program..."
 # Fed on fd 3, not stdin: a plain '< <(...)' would make the worktree list the loop's
@@ -336,9 +353,9 @@ while IFS=$'\t' read -r -u 3 worktree_path worktree_branch; do
         fi
         if "$AUTO_DELETE_MERGED"; then
             yellow "Auto-removing locked worktree '$worktree_path' (clean, landed HEAD)"
-            remove_locked_worktree "$worktree_path" || true
+            { remove_locked_worktree "$worktree_path" && delete_landed_branch "$worktree_branch"; } || true
         elif confirm "Locked worktree ${worktree_path} is clean with a landed HEAD - remove it?"; then
-            remove_locked_worktree "$worktree_path" || true
+            { remove_locked_worktree "$worktree_path" && delete_landed_branch "$worktree_branch"; } || true
         fi
         continue
     fi
