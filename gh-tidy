@@ -12,12 +12,13 @@ Tidies your work space!
     * Runs 'git gc' to clean up unnecessary files & optimize your local repo
     * Checks your local branches for ones that show as merged to master, and asks for your permission to delete them
     * Checks your local branches for ones that have their corresponding pull requests merged, and asks for your permission to delete them
+    * Checks for worktrees locked by another program whose directory no longer exists, and asks for your permission to unlock & remove them
 
 Options:
     --rebase-all
 	Rebases all your local branches to the latest master.
     --auto-delete-merged
-	Automatically delete merged branches without prompting (for non-interactive use, e.g. cron, CI, post-merge hooks).
+	Automatically delete merged branches and stale locked worktrees without prompting (for non-interactive use, e.g. cron, CI, post-merge hooks).
     --skip-gc
 	Skips the 'git gc' step (which executes by default)
     --skip-prune
@@ -29,7 +30,7 @@ Options:
 
 Environment Variables:
     GH_TIDY_REBASE_ALL         Set to 'true' to rebase all branches (same as --rebase-all)
-    GH_TIDY_AUTO_DELETE_MERGED Set to 'true' to auto-delete merged branches (same as --auto-delete-merged)
+    GH_TIDY_AUTO_DELETE_MERGED Set to 'true' to auto-delete merged branches & stale locked worktrees (same as --auto-delete-merged)
     GH_TIDY_SKIP_GC            Set to 'true' to skip git gc (same as --skip-gc)
     GH_TIDY_SKIP_PRUNE         Set to 'true' to skip git fetch --prune (same as --skip-prune)
     GH_TIDY_SKIP_UPDATE_CHECK  Set to 'true' to skip update check (same as --skip-update-check)
@@ -239,6 +240,40 @@ function get_worktree_branches() {
         found_first_separator && /^branch / { sub("^branch refs/heads/", ""); print }
       '
 }
+
+# A worktree locked by another program (IDE, editor, backup/sync tool) is excluded
+# from 'git worktree prune', so once its directory is gone it lingers forever and
+# keeps its branch un-deletable.  List those so we can offer to unlock & remove them.
+function get_stale_locked_worktrees() {
+  git worktree list --porcelain 2>/dev/null \
+    | awk '
+        /^worktree / { path = substr($0, 10); locked = 0 }
+        /^locked/    { locked = 1 }
+        /^$/         { if (locked) print path; path = ""; locked = 0 }
+        END          { if (locked) print path }
+      '
+}
+
+echo
+cyan "Checking for stale worktrees locked by another program..."
+while IFS= read -r worktree_path; do
+    [[ -n "$worktree_path" ]] || continue
+    if [[ -d "$worktree_path" ]]; then
+        # ponytail: a locked worktree whose directory still exists is presumed in use.
+        green "Skipping locked worktree '$worktree_path' (directory still exists)."
+        continue
+    fi
+    if ! "$AUTO_DELETE_MERGED"; then
+        read -p $'\e[93m'"Worktree ${worktree_path} is locked but its directory is gone - remove it? (y/n) "$'\e[0m' -n 1 -r
+        echo
+        [[ $REPLY =~ ^[Yy]$ ]] || continue
+    else
+        yellow "Auto-removing stale locked worktree '${worktree_path}'"
+    fi
+    git worktree unlock "$worktree_path" || true
+    git worktree remove --force "$worktree_path" || true
+done < <(get_stale_locked_worktrees)
+green "Complete!"
 
 worktree_branches=$(get_worktree_branches)
 
