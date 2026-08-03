@@ -12,7 +12,7 @@ Tidies your work space!
     * Runs 'git gc' to clean up unnecessary files & optimize your local repo
     * Checks your local branches for ones that show as merged to master, and asks for your permission to delete them
     * Checks your local branches for ones that have their corresponding pull requests merged, and asks for your permission to delete them
-    * Checks for worktrees locked by another program whose directory no longer exists, and asks for your permission to unlock & remove them
+    * Safely removes eligible clean, landed locked worktrees and interactively handles missing ones
 
 Options:
     --rebase-all
@@ -258,7 +258,12 @@ function get_stale_locked_worktrees() {
 function worktree_head_is_merged() {
     local head="$1"
     git merge-base --is-ancestor "$head" "$trunk_branch" && return 0
-    [[ -n "$(gh api --paginate "repos/{owner}/{repo}/commits/$head/pulls" --jq ".[] | select(.merged_at != null and .head.sha == \"$head\") | .head.sha" 2>/dev/null | grep -Fx "$head")" ]]
+    local merged_heads
+    if ! merged_heads=$(gh api --paginate "repos/{owner}/{repo}/commits/$head/pulls" --jq ".[] | select(.merged_at != null and .head.sha == \"$head\") | .head.sha" 2>/dev/null); then
+        return 2
+    fi
+    printf '%s\n' "$merged_heads" | grep -Fx "$head" >/dev/null && return 0
+    return 1
 }
 
 function remove_locked_worktree() {
@@ -317,7 +322,12 @@ while IFS=$'\t' read -r -u 3 worktree_path worktree_branch; do
             yellow "Keeping locked worktree '$worktree_path' (dirty)."
             continue
         fi
-        if ! worktree_head_is_merged "$worktree_head"; then
+        if worktree_head_is_merged "$worktree_head"; then
+            :
+        elif [[ $? -eq 2 ]]; then
+            yellow "Keeping locked worktree '$worktree_path' (GitHub lookup failed; HEAD is unverifiable)."
+            continue
+        else
             yellow "Keeping locked worktree '$worktree_path' (HEAD is not landed)."
             continue
         fi

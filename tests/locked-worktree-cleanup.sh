@@ -55,9 +55,26 @@ add_locked_worktree "$repo" "$worktree" topic
 touch "$worktree/unlanded"
 git -C "$worktree" add unlanded
 git -C "$worktree" commit -qm unlanded
+gh() { return 0; }
+export -f gh
 output=$(run_tidy "$repo")
+unset -f gh
 assert_exists "$worktree"
 assert_contains "$output" "not landed"
+
+repo="$tmp/lookup-failure"
+worktree="$tmp/lookup-failure-worktree"
+make_repo "$repo"
+add_locked_worktree "$repo" "$worktree" topic
+touch "$worktree/unlanded"
+git -C "$worktree" add unlanded
+git -C "$worktree" commit -qm unlanded
+gh() { return 1; }
+export -f gh
+output=$(run_tidy "$repo")
+unset -f gh
+assert_exists "$worktree"
+assert_contains "$output" "lookup failed"
 
 repo="$tmp/older-pr"
 worktree="$tmp/older-pr-worktree"
