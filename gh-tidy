@@ -243,32 +243,56 @@ function get_worktree_branches() {
 
 # A worktree locked by another program (IDE, editor, backup/sync tool) is excluded
 # from 'git worktree prune', so once its directory is gone it lingers forever and
-# keeps its branch un-deletable.  List those so we can offer to unlock & remove them.
+# keeps its branch un-deletable.  Emit "<path>TAB<branch>" for each of those.
 function get_stale_locked_worktrees() {
   git worktree list --porcelain 2>/dev/null \
-    | awk '
-        /^worktree / { path = substr($0, 10); locked = 0 }
+    | awk -v OFS='\t' '
+        /^worktree / { path = substr($0, 10); branch = ""; locked = 0 }
+        /^branch /   { branch = substr($0, 8); sub("^refs/heads/", "", branch) }
         /^locked/    { locked = 1 }
-        /^$/         { if (locked) print path; path = ""; locked = 0 }
-        END          { if (locked) print path }
+        /^$/         { if (locked) print path, branch; path = ""; branch = ""; locked = 0 }
+        END          { if (locked) print path, branch }
       '
+}
+
+# Has this branch landed on the remote?  Checks a plain merge into trunk first
+# (cheap, offline), then falls back to a merged PR on GitHub to catch squash-merges.
+# Unlike the branch-pruning steps below this isn't limited to --author @me: the
+# question here is "did this land", no matter who opened the PR.
+function branch_is_merged() {
+    local branch="$1"
+    [[ -n "$branch" ]] || return 1
+    if git branch --merged "$trunk_branch" --format='%(refname:short)' | grep -qx "$branch"; then
+        return 0
+    fi
+    [[ -n "$(gh pr list --state merged --limit 1 --search "head:$branch" --json headRefName --jq '.[].headRefName' 2>/dev/null)" ]]
 }
 
 echo
 cyan "Checking for stale worktrees locked by another program..."
-while IFS= read -r worktree_path; do
+while IFS=$'\t' read -r worktree_path worktree_branch; do
     [[ -n "$worktree_path" ]] || continue
     if [[ -d "$worktree_path" ]]; then
         # ponytail: a locked worktree whose directory still exists is presumed in use.
         green "Skipping locked worktree '$worktree_path' (directory still exists)."
         continue
     fi
+    # Removing a worktree never deletes its branch, so this is reported to inform the
+    # choice, not to block it - an unmerged branch survives and is left for the
+    # branch-pruning steps below.
+    if [[ -z "$worktree_branch" ]]; then
+        merge_status="no branch checked out"
+    elif branch_is_merged "$worktree_branch"; then
+        merge_status="branch '$worktree_branch' is merged"
+    else
+        merge_status="branch '$worktree_branch' is NOT merged - it will be kept"
+    fi
     if ! "$AUTO_DELETE_MERGED"; then
-        read -p $'\e[93m'"Worktree ${worktree_path} is locked but its directory is gone - remove it? (y/n) "$'\e[0m' -n 1 -r
+        read -p $'\e[93m'"Worktree ${worktree_path} is locked but its directory is gone (${merge_status}) - remove it? (y/n) "$'\e[0m' -n 1 -r
         echo
         [[ $REPLY =~ ^[Yy]$ ]] || continue
     else
-        yellow "Auto-removing stale locked worktree '${worktree_path}'"
+        yellow "Auto-removing stale locked worktree '${worktree_path}' (${merge_status})"
     fi
     git worktree unlock "$worktree_path" || true
     git worktree remove --force "$worktree_path" || true
