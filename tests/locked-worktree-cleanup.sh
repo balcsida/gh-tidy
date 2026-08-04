@@ -146,7 +146,10 @@ done
 git -C "$repo" checkout -q main
 GH_TIDY_TEST_MATCH_HEAD=$(git -C "$repo" rev-parse review/pr-80)
 gh() {
-  if [[ "$1" == api && "$3" == "repos/{owner}/{repo}/commits/$GH_TIDY_TEST_MATCH_HEAD/pulls" ]]; then
+  if [[ "$1 $2" == "repo view" ]]; then
+    echo github.example.com
+  elif [[ "$1" == api && "$2" == --hostname && "$3" == github.example.com \
+    && "$5" == "repos/{owner}/{repo}/commits/$GH_TIDY_TEST_MATCH_HEAD/pulls" ]]; then
     echo "$GH_TIDY_TEST_MATCH_HEAD"
   fi
   return 0

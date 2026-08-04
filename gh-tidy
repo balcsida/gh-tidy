@@ -266,11 +266,13 @@ function get_prunable_worktrees() {
 # Has this commit landed on the trunk?  Returns 0 yes, 1 no, 2 couldn't tell.
 # The GitHub lookup is by head commit, not branch name or author, so it also sees
 # squash merges and pull requests opened by someone other than you.
+github_host=$(gh repo view --json url --jq '.url | capture("^https?://(?<host>[^/]+)").host' 2>/dev/null || true)
 function head_is_merged() {
     local head="$1"
     git merge-base --is-ancestor "$head" "$trunk_branch" && return 0
-    local merged_heads
-    if ! merged_heads=$(gh api --paginate "repos/{owner}/{repo}/commits/$head/pulls" --jq ".[] | select(.merged_at != null and .head.sha == \"$head\") | .head.sha" 2>/dev/null); then
+    local merged_heads hostname=()
+    [[ -z "$github_host" ]] || hostname=(--hostname "$github_host")
+    if ! merged_heads=$(gh api "${hostname[@]}" --paginate "repos/{owner}/{repo}/commits/$head/pulls" --jq ".[] | select(.merged_at != null and .head.sha == \"$head\") | .head.sha" 2>/dev/null); then
         return 2
     fi
     printf '%s\n' "$merged_heads" | grep -Fx "$head" >/dev/null && return 0
