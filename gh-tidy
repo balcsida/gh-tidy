@@ -266,11 +266,23 @@ function get_prunable_worktrees() {
 # Has this commit landed on the trunk?  Returns 0 yes, 1 no, 2 couldn't tell.
 # The GitHub lookup is by head commit, not branch name or author, so it also sees
 # squash merges and pull requests opened by someone other than you.
-github_host=$(gh repo view --json url --jq '.url | capture("^https?://(?<host>[^/]+)").host' 2>/dev/null || true)
+# `gh api` is not repository-aware the way `gh repo view` is, so on a GitHub
+# Enterprise remote it would query github.com and 404.  Resolve the host from
+# the remote on first use only: it costs a network round-trip, and the ancestor
+# check below settles most commits without ever reaching the API.
+github_host=""
+github_host_resolved=0
+function resolve_github_host() {
+    [[ "$github_host_resolved" == 1 ]] && return
+    github_host_resolved=1
+    github_host=$(gh repo view --json url --jq '.url | capture("^https?://(?<host>[^/]+)").host' 2>/dev/null || true)
+}
+
 function head_is_merged() {
     local head="$1"
     git merge-base --is-ancestor "$head" "$trunk_branch" && return 0
     local merged_heads hostname=()
+    resolve_github_host
     [[ -z "$github_host" ]] || hostname=(--hostname "$github_host")
     if ! merged_heads=$(gh api "${hostname[@]}" --paginate "repos/{owner}/{repo}/commits/$head/pulls" --jq ".[] | select(.merged_at != null and .head.sha == \"$head\") | .head.sha" 2>/dev/null); then
         return 2
