@@ -284,7 +284,12 @@ function head_is_merged() {
     local merged_heads hostname=()
     resolve_github_host
     [[ -z "$github_host" ]] || hostname=(--hostname "$github_host")
-    if ! merged_heads=$(gh api "${hostname[@]}" --paginate "repos/{owner}/{repo}/commits/$head/pulls" --jq ".[] | select(.merged_at != null and .head.sha == \"$head\") | .head.sha" 2>/dev/null); then
+    # Fold stderr in so a failure carries its reason; grep -Fx below needs a
+    # whole-line SHA match, so any stray warning on the success path is inert.
+    if ! merged_heads=$(gh api "${hostname[@]}" --paginate "repos/{owner}/{repo}/commits/$head/pulls" --jq ".[] | select(.merged_at != null and .head.sha == \"$head\") | .head.sha" 2>&1); then
+        # HTTP 422: the server has never seen this commit, so it cannot have
+        # landed through a pull request. That is an answer, not a failure.
+        [[ "$merged_heads" == *"No commit found for SHA"* ]] && return 1
         return 2
     fi
     printf '%s\n' "$merged_heads" | grep -Fx "$head" >/dev/null && return 0
