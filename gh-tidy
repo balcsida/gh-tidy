@@ -380,12 +380,11 @@ while IFS=$'\t' read -r -u 3 worktree_path worktree_branch worktree_locked; do
             yellow "Keeping worktree '$worktree_path' (dirty)."
             continue
         fi
-        if head_is_merged "$worktree_head"; then
-            :
-        elif [[ $? -eq 2 ]]; then
+        head_is_merged "$worktree_head" && merge_check=0 || merge_check=$?
+        if [[ $merge_check -eq 2 ]]; then
             yellow "Keeping worktree '$worktree_path' (GitHub lookup failed; HEAD is unverifiable)."
             continue
-        else
+        elif [[ $merge_check -ne 0 ]]; then
             yellow "Keeping worktree '$worktree_path' (HEAD is not landed)."
             continue
         fi

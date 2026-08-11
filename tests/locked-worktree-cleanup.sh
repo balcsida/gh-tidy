@@ -92,6 +92,8 @@ output=$(run_tidy "$repo")
 unset -f gh
 assert_exists "$worktree"
 assert_contains "$output" "not landed"
+# Clean but unlanded: neither the worktree nor its branch may be touched.
+assert_branch "$repo" topic
 
 repo="$tmp/lookup-failure"
 worktree="$tmp/lookup-failure-worktree"
